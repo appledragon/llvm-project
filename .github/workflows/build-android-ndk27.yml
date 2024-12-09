@@ -1,0 +1,59 @@
+name: Build LLVM for ARM64
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    # Step 1: 检出您的 Fork 的代码
+    - name: Checkout Code
+      uses: actions/checkout@v3
+      with:
+        repository: appledragon/llvm-project
+        ref: main  # 替换为您 Fork 的分支名称（如 main 或 custom-branch）
+
+    # Step 2: 安装依赖工具
+    - name: Install Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake ninja-build python3 python3-pip build-essential
+
+    # Step 3: 配置构建
+    - name: Configure Build
+      run: |
+        mkdir -p build
+        cd build
+        cmake -G Ninja \
+          -DLLVM_ENABLE_PROJECTS="clang;lld;compiler-rt" \
+          -DLLVM_TARGETS_TO_BUILD="AArch64" \
+          -DLLVM_ENABLE_LTO=ON \
+          -DLLVM_ENABLE_PGO=ON \
+          -DLLVM_TOOL_CLANG_SCAN_DEPS_BUILD=OFF \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_INSTALL_PREFIX=$GITHUB_WORKSPACE/install \
+          ../llvm
+
+    # Step 4: 开始构建
+    - name: Build LLVM
+      run: |
+        cd build
+        ninja
+
+    # Step 5: 安装到指定目录
+    - name: Install LLVM
+      run: |
+        cd build
+        ninja install
+
+    # Step 6: 上传构建产物
+    - name: Upload Build Artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: llvm-arm64
+        path: install/
