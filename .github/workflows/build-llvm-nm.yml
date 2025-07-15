@@ -34,8 +34,8 @@ jobs:
           arch -x86_64 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
         fi
         
-        # Install dependencies using x86_64 Homebrew
-        arch -x86_64 /usr/local/bin/brew install cmake ninja zstd
+        # Install dependencies using x86_64 Homebrew (without zstd to avoid conflicts)
+        arch -x86_64 /usr/local/bin/brew install cmake ninja
 
     - name: Install dependencies (arm64)
       if: matrix.arch == 'arm64'
@@ -61,6 +61,11 @@ jobs:
     - name: Configure and build llvm-nm (x86_64)
       if: matrix.arch == 'x86_64'
       run: |
+        # Clear any ARM64 paths that might interfere
+        export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        export CMAKE_PREFIX_PATH="/usr/local"
+        export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig"
+        
         mkdir build
         cd build
         arch -x86_64 /usr/local/bin/cmake -G Ninja ../llvm \
@@ -69,11 +74,13 @@ jobs:
           -DLLVM_TARGETS_TO_BUILD="X86" \
           -DCMAKE_BUILD_TYPE=Release \
           -DCMAKE_OSX_ARCHITECTURES=x86_64 \
-          -DCMAKE_PREFIX_PATH=/usr/local \
-          -DZSTD_ROOT=/usr/local \
+          -DCMAKE_PREFIX_PATH="/usr/local" \
           -DCMAKE_C_FLAGS="-arch x86_64" \
           -DCMAKE_CXX_FLAGS="-arch x86_64" \
-          -DCMAKE_EXE_LINKER_FLAGS="-arch x86_64"
+          -DCMAKE_EXE_LINKER_FLAGS="-arch x86_64" \
+          -DLLVM_ENABLE_ZSTD=OFF \
+          -DLLVM_ENABLE_ZLIB=OFF \
+          -DLLVM_ENABLE_LIBXML2=OFF
         arch -x86_64 /usr/local/bin/ninja llvm-nm
 
     - name: Configure and build llvm-nm (arm64)
@@ -87,8 +94,8 @@ jobs:
           -DLLVM_TARGETS_TO_BUILD="X86" \
           -DCMAKE_BUILD_TYPE=Release \
           -DCMAKE_OSX_ARCHITECTURES=arm64 \
-          -DCMAKE_PREFIX_PATH=/opt/homebrew \
-          -DZSTD_ROOT=/opt/homebrew
+          -DCMAKE_PREFIX_PATH="/opt/homebrew" \
+          -DZSTD_ROOT="/opt/homebrew"
         ninja llvm-nm
 
     - name: Prepare artifact
