@@ -23,8 +23,28 @@ jobs:
       with:
         fetch-depth: 1
 
-    - name: Install dependencies
-      run: brew install cmake ninja
+    - name: Install Homebrew (Rosetta for x86_64)
+      if: matrix.arch == 'x86_64'
+      run: |
+        sudo softwareupdate --install-rosetta --agree-to-license
+        arch -x86_64 /usr/local/bin/brew install cmake ninja zstd
+
+    - name: Install dependencies (arm64)
+      if: matrix.arch == 'arm64'
+      run: |
+        brew install cmake ninja zstd
+
+    - name: Set library paths for x86_64
+      if: matrix.arch == 'x86_64'
+      run: |
+        echo "LIBRARY_PATH=/usr/local/lib" >> $GITHUB_ENV
+        echo "CPATH=/usr/local/include" >> $GITHUB_ENV
+
+    - name: Set library paths for arm64
+      if: matrix.arch == 'arm64'
+      run: |
+        echo "LIBRARY_PATH=/opt/homebrew/lib" >> $GITHUB_ENV
+        echo "CPATH=/opt/homebrew/include" >> $GITHUB_ENV
 
     - name: Configure and build llvm-nm
       run: |
@@ -35,15 +55,15 @@ jobs:
           -DLLVM_TOOL_LLVM_NM_BUILD=ON \
           -DLLVM_TARGETS_TO_BUILD="X86" \
           -DCMAKE_BUILD_TYPE=Release \
-          -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }}
+          -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }} \
+          -DZSTD_LIBRARY=$LIBRARY_PATH/libzstd.dylib \
+          -DZSTD_INCLUDE_DIR=$CPATH
         ninja llvm-nm
 
     - name: Prepare artifact
       run: |
         mkdir -p llvm-nm-macos-${{ matrix.arch }}
         cp build/bin/llvm-nm llvm-nm-macos-${{ matrix.arch }}/
-        file llvm-nm-macos-${{ matrix.arch }}/llvm-nm
-        # 可加 README
 
     - name: Archive
       run: |
@@ -55,47 +75,6 @@ jobs:
         name: llvm-nm-macos-${{ matrix.arch }}
         path: llvm-nm-macos-${{ matrix.arch }}.tar.gz
 
-  build-windows:
-    runs-on: windows-2022
-    strategy:
-      matrix:
-        arch: [x64, x86]
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 1
-
-    - name: Install dependencies
-      run: choco install cmake ninja
-
-    - name: Configure and build llvm-nm
-      run: |
-        mkdir build
-        cd build
-        cmake -G Ninja ../llvm ^
-          -DLLVM_ENABLE_PROJECTS=llvm ^
-          -DLLVM_TOOL_LLVM_NM_BUILD=ON ^
-          -DLLVM_TARGETS_TO_BUILD="X86" ^
-          -DCMAKE_BUILD_TYPE=Release
-        ninja llvm-nm
-
-    - name: Prepare artifact
-      run: |
-        mkdir llvm-nm-windows-${{ matrix.arch }}
-        copy build\bin\llvm-nm.exe llvm-nm-windows-${{ matrix.arch }}\
-        # 可加 README
-
-    - name: Archive
-      run: |
-        Compress-Archive -Path llvm-nm-windows-${{ matrix.arch }}\* -DestinationPath llvm-nm-windows-${{ matrix.arch }}.zip
-
-    - name: Upload artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: llvm-nm-windows-${{ matrix.arch }}
-        path: llvm-nm-windows-${{ matrix.arch }}.zip
-
   build-linux:
     runs-on: ubuntu-latest
     steps:
@@ -105,7 +84,7 @@ jobs:
         fetch-depth: 1
 
     - name: Install dependencies
-      run: sudo apt-get update && sudo apt-get install -y cmake ninja-build build-essential
+      run: sudo apt-get update && sudo apt-get install -y cmake ninja-build build-essential libzstd-dev
 
     - name: Configure and build llvm-nm
       run: |
@@ -122,8 +101,6 @@ jobs:
       run: |
         mkdir -p llvm-nm-linux-x86_64
         cp build/bin/llvm-nm llvm-nm-linux-x86_64/
-        file llvm-nm-linux-x86_64/llvm-nm
-        # 可加 README
 
     - name: Archive
       run: |
@@ -134,6 +111,46 @@ jobs:
       with:
         name: llvm-nm-linux-x86_64
         path: llvm-nm-linux-x86_64.tar.gz
+
+  build-windows:
+    runs-on: windows-2022
+    strategy:
+      matrix:
+        arch: [x64, x86]
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 1
+
+    - name: Install dependencies
+      run: choco install cmake ninja zstd
+
+    - name: Configure and build llvm-nm
+      run: |
+        mkdir build
+        cd build
+        cmake -G Ninja ../llvm ^
+          -DLLVM_ENABLE_PROJECTS=llvm ^
+          -DLLVM_TOOL_LLVM_NM_BUILD=ON ^
+          -DLLVM_TARGETS_TO_BUILD="X86" ^
+          -DCMAKE_BUILD_TYPE=Release
+        ninja llvm-nm
+
+    - name: Prepare artifact
+      run: |
+        mkdir llvm-nm-windows-${{ matrix.arch }}
+        copy build\bin\llvm-nm.exe llvm-nm-windows-${{ matrix.arch }}\
+
+    - name: Archive
+      run: |
+        Compress-Archive -Path llvm-nm-windows-${{ matrix.arch }}\* -DestinationPath llvm-nm-windows-${{ matrix.arch }}.zip
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: llvm-nm-windows-${{ matrix.arch }}
+        path: llvm-nm-windows-${{ matrix.arch }}.zip
 
   create-release:
     needs: [build-macos, build-linux, build-windows]
@@ -149,7 +166,6 @@ jobs:
       run: |
         mkdir release-assets
         find artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec cp {} release-assets/ \;
-        ls -la release-assets/
 
     - name: Create Release
       uses: softprops/action-gh-release@v1
@@ -157,26 +173,11 @@ jobs:
         tag_name: ${{ github.event.inputs.release_tag || github.ref_name }}
         name: LLVM-NM Prebuilt Binaries ${{ github.event.inputs.release_tag || github.ref_name }}
         body: >-
-          ## LLVM-NM Prebuilt Binaries (Release Build)
+          ## LLVM-NM Prebuilt Binaries
 
-          This release contains prebuilt llvm-nm binaries for macOS, Windows, and Linux.
+          适用于 macOS (arm64/x86_64)、Windows (x64/x86)、Linux (x86_64) 的预编译 llvm-nm 二进制包。
 
-          ### macOS
-          - `llvm-nm-macos-x86_64.tar.gz`
-          - `llvm-nm-macos-arm64.tar.gz`
-
-          ### Windows
-          - `llvm-nm-windows-x64.zip`
-          - `llvm-nm-windows-x86.zip`
-
-          ### Linux
-          - `llvm-nm-linux-x86_64.tar.gz`
-
-          Each package includes:
-          - **llvm-nm**: LLVM's symbol table dumper tool.
-          - README with usage instructions.
-
-          Built from commit: ${{ github.sha }}
+          构建 commit: ${{ github.sha }}
         files: release-assets/*
         draft: false
         prerelease: ${{ github.event.inputs.release_tag == 'nightly' || contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') }}
