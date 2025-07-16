@@ -161,18 +161,18 @@ jobs:
       with:
         fetch-depth: 1
 
+    - name: Setup MSVC
+      uses: microsoft/setup-msbuild@v1.3
+
     - name: Install dependencies
-      run: choco install cmake ninja zstd
+      run: choco install cmake ninja
 
     - name: Configure and build llvm-nm
+      shell: cmd
       run: |
         mkdir build
         cd build
-        cmake -G Ninja ../llvm ^
-          -DLLVM_ENABLE_PROJECTS=llvm ^
-          -DLLVM_TOOL_LLVM_NM_BUILD=ON ^
-          -DLLVM_TARGETS_TO_BUILD="X86" ^
-          -DCMAKE_BUILD_TYPE=Release
+        cmake -G Ninja ../llvm -DLLVM_ENABLE_PROJECTS=llvm -DLLVM_TOOL_LLVM_NM_BUILD=ON -DLLVM_TARGETS_TO_BUILD="X86" -DCMAKE_BUILD_TYPE=Release
         ninja llvm-nm
 
     - name: Prepare artifact
