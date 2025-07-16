@@ -171,11 +171,7 @@ jobs:
       run: |
         mkdir build
         cd build
-        cmake -G "Ninja" ../llvm `
-          -DLLVM_ENABLE_PROJECTS=llvm `
-          -DLLVM_TOOL_LLVM_NM_BUILD=ON `
-          -DLLVM_TARGETS_TO_BUILD=X86 `
-          -DCMAKE_BUILD_TYPE=Release
+        cmake -G "Ninja" ../llvm -DLLVM_ENABLE_PROJECTS=llvm -DLLVM_TOOL_LLVM_NM_BUILD=ON -DLLVM_TARGETS_TO_BUILD=X86 -DCMAKE_BUILD_TYPE=Release
         ninja llvm-nm
 
     - name: Prepare artifact
