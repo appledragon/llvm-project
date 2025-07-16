@@ -24,7 +24,6 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-#include "llvm/ADT/DenseMap.h"
 
 namespace mlir {
 #define GEN_PASS_DEF_SCFFORLOOPPEELING
@@ -331,7 +330,7 @@ struct ForLoopPeeling : public impl::SCFForLoopPeelingBase<ForLoopPeeling> {
     MLIRContext *ctx = parentOp->getContext();
     RewritePatternSet patterns(ctx);
     patterns.add<ForLoopPeelingPattern>(ctx, peelFront, skipPartial);
-    (void)applyPatternsAndFoldGreedily(parentOp, std::move(patterns));
+    (void)applyPatternsGreedily(parentOp, std::move(patterns));
 
     // Drop the markers.
     parentOp->walk([](Operation *op) {

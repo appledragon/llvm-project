@@ -28,7 +28,6 @@
 #include "llvm/ADT/APSInt.h"
 #include "llvm/ADT/FloatingPointMode.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/TypeSwitch.h"
 
@@ -207,11 +206,6 @@ void arith::ConstantOp::getAsmResultNames(
 /// or float like.
 LogicalResult arith::ConstantOp::verify() {
   auto type = getType();
-  // The value's type must match the return type.
-  if (getValue().getType() != type) {
-    return emitOpError() << "value type " << getValue().getType()
-                         << " must match return type: " << type;
-  }
   // Integer values must be signless.
   if (llvm::isa<IntegerType>(type) &&
       !llvm::cast<IntegerType>(type).isSignless())
@@ -262,9 +256,13 @@ void arith::ConstantIntOp::build(OpBuilder &builder, OperationState &result,
 }
 
 void arith::ConstantIntOp::build(OpBuilder &builder, OperationState &result,
-                                 int64_t value, Type type) {
-  assert(type.isSignlessInteger() &&
-         "ConstantIntOp can only have signless integer type values");
+                                 Type type, int64_t value) {
+  arith::ConstantOp::build(builder, result, type,
+                           builder.getIntegerAttr(type, value));
+}
+
+void arith::ConstantIntOp::build(OpBuilder &builder, OperationState &result,
+                                 Type type, const APInt &value) {
   arith::ConstantOp::build(builder, result, type,
                            builder.getIntegerAttr(type, value));
 }
@@ -276,7 +274,7 @@ bool arith::ConstantIntOp::classof(Operation *op) {
 }
 
 void arith::ConstantFloatOp::build(OpBuilder &builder, OperationState &result,
-                                   const APFloat &value, FloatType type) {
+                                   FloatType type, const APFloat &value) {
   arith::ConstantOp::build(builder, result, type,
                            builder.getFloatAttr(type, value));
 }
@@ -297,6 +295,16 @@ bool arith::ConstantIndexOp::classof(Operation *op) {
   if (auto constOp = dyn_cast_or_null<arith::ConstantOp>(op))
     return constOp.getType().isIndex();
   return false;
+}
+
+Value mlir::arith::getZeroConstant(OpBuilder &builder, Location loc,
+                                   Type type) {
+  // TODO: Incorporate this check to `FloatAttr::get*`.
+  assert(!isa<Float8E8M0FNUType>(getElementTypeOrSelf(type)) &&
+         "type doesn't have a zero representation");
+  TypedAttr zeroAttr = builder.getZeroAttr(type);
+  assert(zeroAttr && "unsupported type for zero attribute");
+  return builder.create<arith::ConstantOp>(loc, zeroAttr);
 }
 
 //===----------------------------------------------------------------------===//
@@ -580,10 +588,30 @@ void arith::MulUIExtendedOp::getCanonicalizationPatterns(
 // DivUIOp
 //===----------------------------------------------------------------------===//
 
+/// Fold `(a * b) / b -> a`
+static Value foldDivMul(Value lhs, Value rhs,
+                        arith::IntegerOverflowFlags ovfFlags) {
+  auto mul = lhs.getDefiningOp<mlir::arith::MulIOp>();
+  if (!mul || !bitEnumContainsAll(mul.getOverflowFlags(), ovfFlags))
+    return {};
+
+  if (mul.getLhs() == rhs)
+    return mul.getRhs();
+
+  if (mul.getRhs() == rhs)
+    return mul.getLhs();
+
+  return {};
+}
+
 OpFoldResult arith::DivUIOp::fold(FoldAdaptor adaptor) {
   // divui (x, 1) -> x.
   if (matchPattern(adaptor.getRhs(), m_One()))
     return getLhs();
+
+  // (a * b) / b -> a
+  if (Value val = foldDivMul(getLhs(), getRhs(), IntegerOverflowFlags::nuw))
+    return val;
 
   // Don't fold if it would require a division by zero.
   bool div0 = false;
@@ -620,6 +648,10 @@ OpFoldResult arith::DivSIOp::fold(FoldAdaptor adaptor) {
   // divsi (x, 1) -> x.
   if (matchPattern(adaptor.getRhs(), m_One()))
     return getLhs();
+
+  // (a * b) / b -> a
+  if (Value val = foldDivMul(getLhs(), getRhs(), IntegerOverflowFlags::nsw))
+    return val;
 
   // Don't fold if it would overflow or if it requires a division by zero.
   bool overflowOrDiv0 = false;
@@ -956,7 +988,7 @@ void arith::XOrIOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
 //===----------------------------------------------------------------------===//
 
 OpFoldResult arith::NegFOp::fold(FoldAdaptor adaptor) {
-  // negf(negf(x)) -> x
+  /// negf(negf(x)) -> x
   if (auto op = this->getOperand().getDefiningOp<arith::NegFOp>())
     return op.getOperand();
   return constFoldUnaryOp<FloatAttr>(adaptor.getOperands(),
@@ -984,14 +1016,6 @@ OpFoldResult arith::AddFOp::fold(FoldAdaptor adaptor) {
 OpFoldResult arith::SubFOp::fold(FoldAdaptor adaptor) {
   // subf(x, +0) -> x
   if (matchPattern(adaptor.getRhs(), m_PosZeroFloat()))
-    return getLhs();
-
-  // Simplifies subf(x, rhs) to x if the following conditions are met:
-  // 1. `rhs` is a denormal floating-point value.
-  // 2. The denormal mode for the operation is set to positive zero.
-  bool isPositiveZeroMode =
-      getDenormalModeAttr().getValue() == DenormalMode::positive_zero;
-  if (isPositiveZeroMode && matchPattern(adaptor.getRhs(), m_isDenormalFloat()))
     return getLhs();
 
   return constFoldBinaryOp<FloatAttr>(
@@ -1441,6 +1465,19 @@ bool arith::ExtFOp::areCastCompatible(TypeRange inputs, TypeRange outputs) {
 LogicalResult arith::ExtFOp::verify() { return verifyExtOp<FloatType>(*this); }
 
 //===----------------------------------------------------------------------===//
+// ScalingExtFOp
+//===----------------------------------------------------------------------===//
+
+bool arith::ScalingExtFOp::areCastCompatible(TypeRange inputs,
+                                             TypeRange outputs) {
+  return checkWidthChangeCast<std::greater, FloatType>(inputs.front(), outputs);
+}
+
+LogicalResult arith::ScalingExtFOp::verify() {
+  return verifyExtOp<FloatType>(*this);
+}
+
+//===----------------------------------------------------------------------===//
 // TruncIOp
 //===----------------------------------------------------------------------===//
 
@@ -1485,9 +1522,9 @@ bool arith::TruncIOp::areCastCompatible(TypeRange inputs, TypeRange outputs) {
 
 void arith::TruncIOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
                                                   MLIRContext *context) {
-  patterns.add<TruncIExtSIToExtSI, TruncIExtUIToExtUI, TruncIShrSIToTrunciShrUI,
-               TruncIShrUIMulIToMulSIExtended, TruncIShrUIMulIToMulUIExtended>(
-      context);
+  patterns
+      .add<TruncIExtSIToExtSI, TruncIExtUIToExtUI, TruncIShrSIToTrunciShrUI>(
+          context);
 }
 
 LogicalResult arith::TruncIOp::verify() {
@@ -1502,6 +1539,27 @@ LogicalResult arith::TruncIOp::verify() {
 /// can be represented without precision loss.
 OpFoldResult arith::TruncFOp::fold(FoldAdaptor adaptor) {
   auto resElemType = cast<FloatType>(getElementTypeOrSelf(getType()));
+  if (auto extOp = getOperand().getDefiningOp<arith::ExtFOp>()) {
+    Value src = extOp.getIn();
+    auto srcType = cast<FloatType>(getElementTypeOrSelf(src.getType()));
+    auto intermediateType =
+        cast<FloatType>(getElementTypeOrSelf(extOp.getType()));
+    // Check if the srcType is representable in the intermediateType.
+    if (llvm::APFloatBase::isRepresentableBy(
+            srcType.getFloatSemantics(),
+            intermediateType.getFloatSemantics())) {
+      // truncf(extf(a)) -> truncf(a)
+      if (srcType.getWidth() > resElemType.getWidth()) {
+        setOperand(src);
+        return getResult();
+      }
+
+      // truncf(extf(a)) -> a
+      if (srcType == resElemType)
+        return src;
+    }
+  }
+
   const llvm::fltSemantics &targetSemantics = resElemType.getFloatSemantics();
   return constFoldCastOp<FloatAttr, FloatAttr>(
       adaptor.getOperands(), getType(),
@@ -1520,11 +1578,29 @@ OpFoldResult arith::TruncFOp::fold(FoldAdaptor adaptor) {
       });
 }
 
+void arith::TruncFOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
+                                                  MLIRContext *context) {
+  patterns.add<TruncFSIToFPToSIToFP, TruncFUIToFPToUIToFP>(context);
+}
+
 bool arith::TruncFOp::areCastCompatible(TypeRange inputs, TypeRange outputs) {
   return checkWidthChangeCast<std::less, FloatType>(inputs, outputs);
 }
 
 LogicalResult arith::TruncFOp::verify() {
+  return verifyTruncateOp<FloatType>(*this);
+}
+
+//===----------------------------------------------------------------------===//
+// ScalingTruncFOp
+//===----------------------------------------------------------------------===//
+
+bool arith::ScalingTruncFOp::areCastCompatible(TypeRange inputs,
+                                               TypeRange outputs) {
+  return checkWidthChangeCast<std::less, FloatType>(inputs.front(), outputs);
+}
+
+LogicalResult arith::ScalingTruncFOp::verify() {
   return verifyTruncateOp<FloatType>(*this);
 }
 
@@ -1724,10 +1800,8 @@ bool arith::BitcastOp::areCastCompatible(TypeRange inputs, TypeRange outputs) {
   if (!areValidCastInputsAndOutputs(inputs, outputs))
     return false;
 
-  auto srcType =
-      getTypeIfLikeOrMemRef<IntegerType, IndexType, FloatType>(inputs.front());
-  auto dstType =
-      getTypeIfLikeOrMemRef<IntegerType, IndexType, FloatType>(outputs.front());
+  auto srcType = getTypeIfLikeOrMemRef<IntegerType, FloatType>(inputs.front());
+  auto dstType = getTypeIfLikeOrMemRef<IntegerType, FloatType>(outputs.front());
   if (!srcType || !dstType)
     return false;
 
@@ -1746,6 +1820,10 @@ OpFoldResult arith::BitcastOp::fold(FoldAdaptor adaptor) {
   /// Other shaped types unhandled.
   if (llvm::isa<ShapedType>(resType))
     return {};
+
+  /// Bitcast poison.
+  if (llvm::isa<ub::PoisonAttr>(operand))
+    return ub::PoisonAttr::get(getContext());
 
   /// Bitcast integer or float to integer or float.
   APInt bits = llvm::isa<FloatAttr>(operand)
@@ -1851,6 +1929,18 @@ OpFoldResult arith::CmpIOp::fold(FoldAdaptor adaptor) {
           getPredicate() == arith::CmpIPredicate::ne)
         return extOp.getOperand();
     }
+
+    // arith.cmpi ne, %val, %zero : i1 -> %val
+    if (getElementTypeOrSelf(getLhs().getType()).isInteger(1) &&
+        getPredicate() == arith::CmpIPredicate::ne)
+      return getLhs();
+  }
+
+  if (matchPattern(adaptor.getRhs(), m_One())) {
+    // arith.cmpi eq, %val, %one : i1 -> %val
+    if (getElementTypeOrSelf(getLhs().getType()).isInteger(1) &&
+        getPredicate() == arith::CmpIPredicate::eq)
+      return getLhs();
   }
 
   // Move constant to the right side.
@@ -2286,7 +2376,7 @@ struct SelectToExtUI : public OpRewritePattern<arith::SelectOp> {
           rewriter.create<arith::XOrIOp>(
               op.getLoc(), op.getCondition(),
               rewriter.create<arith::ConstantIntOp>(
-                  op.getLoc(), 1, op.getCondition().getType())));
+                  op.getLoc(), op.getCondition().getType(), 1)));
       return success();
     }
 

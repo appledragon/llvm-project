@@ -15,9 +15,10 @@
 #include <__cstddef/max_align_t.h>
 #include <__fwd/pair.h>
 #include <__memory_resource/memory_resource.h>
+#include <__new/exceptions.h>
+#include <__new/placement_new_delete.h>
 #include <__utility/exception_guard.h>
 #include <limits>
-#include <new>
 #include <tuple>
 
 #if !defined(_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER)
@@ -40,7 +41,7 @@ template <class _ValueType
           = byte
 #  endif
           >
-class _LIBCPP_AVAILABILITY_PMR _LIBCPP_TEMPLATE_VIS polymorphic_allocator {
+class _LIBCPP_AVAILABILITY_PMR polymorphic_allocator {
 
 public:
   using value_type = _ValueType;
@@ -49,7 +50,9 @@ public:
 
   _LIBCPP_HIDE_FROM_ABI polymorphic_allocator() noexcept : __res_(std::pmr::get_default_resource()) {}
 
-  _LIBCPP_HIDE_FROM_ABI polymorphic_allocator(memory_resource* __r) noexcept : __res_(__r) {}
+  _LIBCPP_HIDE_FROM_ABI polymorphic_allocator(memory_resource* _LIBCPP_DIAGNOSE_NULLPTR __r) noexcept : __res_(__r) {
+    _LIBCPP_ASSERT_NON_NULL(__r, "Attempted to pass a nullptr resource to polymorphic_alloator");
+  }
 
   _LIBCPP_HIDE_FROM_ABI polymorphic_allocator(const polymorphic_allocator&) = default;
 
@@ -63,7 +66,7 @@ public:
 
   [[nodiscard]] _LIBCPP_HIDE_FROM_ABI _ValueType* allocate(size_t __n) {
     if (__n > __max_size()) {
-      __throw_bad_array_new_length();
+      std::__throw_bad_array_new_length();
     }
     return static_cast<_ValueType*>(__res_->allocate(__n * sizeof(_ValueType), alignof(_ValueType)));
   }
@@ -173,7 +176,7 @@ public:
     return polymorphic_allocator();
   }
 
-  _LIBCPP_HIDE_FROM_ABI memory_resource* resource() const noexcept { return __res_; }
+  [[__gnu__::__returns_nonnull__]] _LIBCPP_HIDE_FROM_ABI memory_resource* resource() const noexcept { return __res_; }
 
   _LIBCPP_HIDE_FROM_ABI friend bool
   operator==(const polymorphic_allocator& __lhs, const polymorphic_allocator& __rhs) noexcept {

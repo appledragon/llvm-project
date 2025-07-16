@@ -313,6 +313,7 @@ def hlfir_ParentComponentOp : hlfir_Op<"parent_comp", [AttrSizedOperandSegments,
     std::optional<fir::FortranVariableFlagsEnum> getFortranAttrs() const {
       return std::nullopt;
     }
+    void setFortranAttrs(fir::FortranVariableFlagsEnum flags) {}
   }];
 
   let results = (outs AnyFortranVariable);
@@ -699,6 +700,53 @@ def hlfir_MatmulTransposeOp : hlfir_Op<"matmul_transpose",
   let hasVerifier = 1;
 }
 
+def hlfir_CShiftOp
+    : hlfir_Op<
+          "cshift", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+  let summary = "CSHIFT transformational intrinsic";
+  let description = [{
+    Circular shift of an array
+  }];
+
+  let arguments = (ins AnyFortranArrayObject:$array,
+      AnyFortranIntegerScalarOrArrayObject:$shift,
+      Optional<AnyIntegerType>:$dim);
+
+  let results = (outs hlfir_ExprType);
+
+  let assemblyFormat = [{
+    $array $shift (`dim` $dim^)? attr-dict `:` functional-type(operands, results)
+  }];
+
+  let hasVerifier = 1;
+}
+
+def hlfir_ReshapeOp
+    : hlfir_Op<
+          "reshape", [AttrSizedOperandSegments,
+                      DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+  let summary = "RESHAPE transformational intrinsic";
+  let description = [{
+    Reshapes an ARRAY to correspond to the given SHAPE.
+    If PAD is specified the new array may be padded with elements
+    from PAD array.
+    If ORDER is specified the new array may be permuted accordingly.
+  }];
+
+  let arguments = (ins AnyFortranArrayEntity:$array,
+      AnyFortranNumericalArrayEntity:$shape,
+      Optional<AnyFortranArrayEntity>:$pad,
+      Optional<AnyFortranNumericalArrayEntity>:$order);
+
+  let results = (outs hlfir_ExprType);
+
+  let assemblyFormat = [{
+    $array $shape (`pad` $pad^)? (`order` $order^)? attr-dict `:` functional-type(operands, results)
+  }];
+
+  let hasVerifier = 1;
+}
+
 // An allocation effect is needed because the value produced by the associate
 // is "deallocated" by hlfir.end_associate (the end_associate must not be
 // removed, and there must be only one hlfir.end_associate).
@@ -711,6 +759,13 @@ def hlfir_AssociateOp : hlfir_Op<"associate", [AttrSizedOperandSegments,
     For expressions, this operation is an incentive to re-use the expression
     storage, if any, after the bufferization pass when possible (if the
     expression is not used afterwards).
+
+    For aliasing purposes, hlfir.associate with the source being
+    a trivial FIR value is considered to be a unique allocation
+    that does not alias with anything else. For non-trivial cases
+    it may be a unique allocation or an alias for the source expression
+    storage, so FIR alias analysis will look through it for finding
+    the source.
   }];
 
   let arguments = (ins
@@ -1031,6 +1086,7 @@ def hlfir_NullOp : hlfir_Op<"null", [NoMemoryEffect, fir_FortranVariableOpInterf
     std::optional<fir::FortranVariableFlagsEnum> getFortranAttrs() const {
       return std::nullopt;
     }
+    void setFortranAttrs(fir::FortranVariableFlagsEnum flags) {}
     mlir::Value getShape() const {return mlir::Value{};}
     mlir::OperandRange getExplicitTypeParams() const {
       // Return an empty range.
@@ -1184,6 +1240,7 @@ def hlfir_ShapeOfOp : hlfir_Op<"shape_of", [Pure]> {
   }];
 
   let builders = [OpBuilder<(ins "mlir::Value":$expr)>];
+  let hasFolder = 1;
 }
 
 def hlfir_GetExtentOp : hlfir_Op<"get_extent", [Pure]> {
@@ -1329,7 +1386,9 @@ def hlfir_RegionAssignOp : hlfir_Op<"region_assign", [hlfir_OrderedAssignmentTre
         regions.push_back(&getUserDefinedAssignment());
     }
     mlir::Region* getSubTreeRegion() { return nullptr; }
-
+    bool isPointerAssignment();
+    bool isPointerObjectAssignment();
+    bool isProcedurePointerAssignment();
   }];
 
   let hasCustomAssemblyFormat = 1;
@@ -1716,6 +1775,7 @@ def hlfir_ForallIndexOp : hlfir_Op<"forall_index", [fir_FortranVariableOpInterfa
     std::optional<fir::FortranVariableFlagsEnum> getFortranAttrs() const {
       return std::nullopt;
     }
+    void setFortranAttrs(fir::FortranVariableFlagsEnum flags) {}
     mlir::Value getShape() const {return mlir::Value{};}
     mlir::OperandRange getExplicitTypeParams() const {
       // Return an empty range.

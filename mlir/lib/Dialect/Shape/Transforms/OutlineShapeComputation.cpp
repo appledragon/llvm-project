@@ -12,18 +12,15 @@
 #include "mlir/Dialect/Shape/Transforms/Passes.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/IRMapping.h"
-#include "mlir/IR/Matchers.h"
-#include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/Support/Debug.h"
 #include <queue>
-#include <unordered_set>
 #include <vector>
 
 namespace mlir {
-#define GEN_PASS_DEF_OUTLINESHAPECOMPUTATION
+#define GEN_PASS_DEF_OUTLINESHAPECOMPUTATIONPASS
 #include "mlir/Dialect/Shape/Transforms/Passes.h.inc"
 } // namespace mlir
 
@@ -163,7 +160,8 @@ void constructShapeFunc(
 }
 
 struct OutlineShapeComputationPass
-    : public impl::OutlineShapeComputationBase<OutlineShapeComputationPass> {
+    : public impl::OutlineShapeComputationPassBase<
+          OutlineShapeComputationPass> {
 
   void runOnOperation() override;
 
@@ -207,7 +205,7 @@ void OutlineShapeComputationPass::runOnOperation() {
     MLIRContext *context = funcOp.getContext();
     RewritePatternSet prevPatterns(context);
     prevPatterns.insert<TensorDimOpRewriter>(context);
-    if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(prevPatterns))))
+    if (failed(applyPatternsGreedily(funcOp, std::move(prevPatterns))))
       return signalPassFailure();
 
     // initialize class member `onlyUsedByWithShapes`
@@ -254,7 +252,7 @@ void OutlineShapeComputationPass::runOnOperation() {
     }
 
     // Apply patterns, note this also performs DCE.
-    if (failed(applyPatternsAndFoldGreedily(funcOp, {})))
+    if (failed(applyPatternsGreedily(funcOp, {})))
       return signalPassFailure();
   });
 }
@@ -324,8 +322,3 @@ bool OutlineShapeComputationPass::calOnlyUsedByWithShapesRecursively(
 }
 
 } // namespace
-
-std::unique_ptr<OperationPass<ModuleOp>>
-mlir::createOutlineShapeComputationPass() {
-  return std::make_unique<OutlineShapeComputationPass>();
-}

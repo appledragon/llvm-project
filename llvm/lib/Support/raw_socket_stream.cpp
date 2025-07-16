@@ -81,6 +81,15 @@ static Expected<int> getSocketFD(StringRef SocketPath) {
                                          "Create socket failed");
   }
 
+#ifdef __CYGWIN__
+  // On Cygwin, UNIX sockets involve a handshake between connect and accept
+  // to enable SO_PEERCRED/getpeereid handling.  This necessitates accept being
+  // called before connect can return, but at least the tests in
+  // llvm/unittests/Support/raw_socket_stream_test do both on the same thread
+  // (first connect and then accept), resulting in a deadlock.  This call turns
+  // off the handshake (and SO_PEERCRED/getpeereid support).
+  setsockopt(Socket, SOL_SOCKET, SO_PEERCRED, NULL, 0);
+#endif
   struct sockaddr_un Addr = setSocketAddr(SocketPath);
   if (::connect(Socket, (struct sockaddr *)&Addr, sizeof(Addr)) == -1)
     return llvm::make_error<StringError>(getLastSocketErrorCode(),
@@ -109,6 +118,14 @@ ListeningSocket::ListeningSocket(ListeningSocket &&LS)
 
 Expected<ListeningSocket> ListeningSocket::createUnix(StringRef SocketPath,
                                                       int MaxBacklog) {
+
+  // If SocketPath is too long, the path will be truncated, and there may be
+  // collisions with other truncated addresses that the fs::exists check below
+  // will be unable to detect.
+  if (SocketPath.size() >= sizeof(sockaddr_un::sun_path))
+    return llvm::make_error<StringError>(
+        std::make_error_code(std::errc::filename_too_long),
+        "SocketPath too long");
 
   // Handle instances where the target socket address already exists and
   // differentiate between a preexisting file with and without a bound socket
@@ -147,6 +164,15 @@ Expected<ListeningSocket> ListeningSocket::createUnix(StringRef SocketPath,
     return llvm::make_error<StringError>(getLastSocketErrorCode(),
                                          "socket create failed");
 
+#ifdef __CYGWIN__
+  // On Cygwin, UNIX sockets involve a handshake between connect and accept
+  // to enable SO_PEERCRED/getpeereid handling.  This necessitates accept being
+  // called before connect can return, but at least the tests in
+  // llvm/unittests/Support/raw_socket_stream_test do both on the same thread
+  // (first connect and then accept), resulting in a deadlock.  This call turns
+  // off the handshake (and SO_PEERCRED/getpeereid support).
+  setsockopt(Socket, SOL_SOCKET, SO_PEERCRED, NULL, 0);
+#endif
   struct sockaddr_un Addr = setSocketAddr(SocketPath);
   if (::bind(Socket, (struct sockaddr *)&Addr, sizeof(Addr)) == -1) {
     // Grab error code from call to ::bind before calling ::close
