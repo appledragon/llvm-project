@@ -20,82 +20,52 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
-      with:
-        fetch-depth: 1
 
     - name: Install Homebrew and dependencies (x86_64)
       if: matrix.arch == 'x86_64'
       run: |
-        # Install Rosetta 2 for x86_64 emulation
         sudo softwareupdate --install-rosetta --agree-to-license
-        
-        # Install x86_64 Homebrew if it doesn't exist
         if [ ! -f /usr/local/bin/brew ]; then
           arch -x86_64 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
         fi
-        
-        # Install dependencies using x86_64 Homebrew (without zstd to avoid conflicts)
         arch -x86_64 /usr/local/bin/brew install cmake ninja
 
     - name: Install dependencies (arm64)
       if: matrix.arch == 'arm64'
-      run: |
-        brew install cmake ninja zstd
+      run: brew install cmake ninja zstd
 
     - name: Set environment for x86_64
       if: matrix.arch == 'x86_64'
       run: |
         echo "CMAKE_PREFIX_PATH=/usr/local" >> $GITHUB_ENV
-        echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig" >> $GITHUB_ENV
-        echo "LDFLAGS=-L/usr/local/lib" >> $GITHUB_ENV
-        echo "CPPFLAGS=-I/usr/local/include" >> $GITHUB_ENV
 
     - name: Set environment for arm64
       if: matrix.arch == 'arm64'
       run: |
         echo "CMAKE_PREFIX_PATH=/opt/homebrew" >> $GITHUB_ENV
-        echo "PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig" >> $GITHUB_ENV
-        echo "LDFLAGS=-L/opt/homebrew/lib" >> $GITHUB_ENV
-        echo "CPPFLAGS=-I/opt/homebrew/include" >> $GITHUB_ENV
 
     - name: Configure and build llvm-nm (x86_64)
       if: matrix.arch == 'x86_64'
       run: |
-        # Clear any ARM64 paths that might interfere
-        export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-        export CMAKE_PREFIX_PATH="/usr/local"
-        export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig"
-        
-        mkdir build
-        cd build
-        arch -x86_64 /usr/local/bin/cmake -G Ninja ../llvm \
+        mkdir build && cd build
+        arch -x86_64 cmake -G Ninja ../llvm \
           -DLLVM_ENABLE_PROJECTS=llvm \
           -DLLVM_TOOL_LLVM_NM_BUILD=ON \
           -DLLVM_TARGETS_TO_BUILD="X86" \
           -DCMAKE_BUILD_TYPE=Release \
-          -DCMAKE_OSX_ARCHITECTURES=x86_64 \
-          -DCMAKE_PREFIX_PATH="/usr/local" \
-          -DCMAKE_C_FLAGS="-arch x86_64" \
-          -DCMAKE_CXX_FLAGS="-arch x86_64" \
-          -DCMAKE_EXE_LINKER_FLAGS="-arch x86_64" \
-          -DLLVM_ENABLE_ZSTD=OFF \
-          -DLLVM_ENABLE_ZLIB=OFF \
-          -DLLVM_ENABLE_LIBXML2=OFF
-        arch -x86_64 /usr/local/bin/ninja llvm-nm
+          -DCMAKE_OSX_ARCHITECTURES=x86_64
+        arch -x86_64 ninja llvm-nm
 
     - name: Configure and build llvm-nm (arm64)
       if: matrix.arch == 'arm64'
       run: |
-        mkdir build
-        cd build
+        mkdir build && cd build
         cmake -G Ninja ../llvm \
           -DLLVM_ENABLE_PROJECTS=llvm \
           -DLLVM_TOOL_LLVM_NM_BUILD=ON \
           -DLLVM_TARGETS_TO_BUILD="X86" \
           -DCMAKE_BUILD_TYPE=Release \
-          -DCMAKE_OSX_ARCHITECTURES=arm64 \
-          -DCMAKE_PREFIX_PATH="/opt/homebrew" \
-          -DZSTD_ROOT="/opt/homebrew"
+          -DCMAKE_OSX_ARCHITECTURES=arm64
         ninja llvm-nm
 
     - name: Prepare artifact
@@ -104,8 +74,7 @@ jobs:
         cp build/bin/llvm-nm llvm-nm-macos-${{ matrix.arch }}/
 
     - name: Archive
-      run: |
-        tar -czf llvm-nm-macos-${{ matrix.arch }}.tar.gz llvm-nm-macos-${{ matrix.arch }}/
+      run: tar -czf llvm-nm-macos-${{ matrix.arch }}.tar.gz llvm-nm-macos-${{ matrix.arch }}/
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
@@ -118,16 +87,13 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
-      with:
-        fetch-depth: 1
 
     - name: Install dependencies
       run: sudo apt-get update && sudo apt-get install -y cmake ninja-build build-essential libzstd-dev
 
     - name: Configure and build llvm-nm
       run: |
-        mkdir build
-        cd build
+        mkdir build && cd build
         cmake -G Ninja ../llvm \
           -DLLVM_ENABLE_PROJECTS=llvm \
           -DLLVM_TOOL_LLVM_NM_BUILD=ON \
@@ -141,8 +107,7 @@ jobs:
         cp build/bin/llvm-nm llvm-nm-linux-x86_64/
 
     - name: Archive
-      run: |
-        tar -czf llvm-nm-linux-x86_64.tar.gz llvm-nm-linux-x86_64/
+      run: tar -czf llvm-nm-linux-x86_64.tar.gz llvm-nm-linux-x86_64/
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
@@ -158,8 +123,6 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
-      with:
-        fetch-depth: 1
 
     - name: Setup MSVC
       uses: microsoft/setup-msbuild@v1.3
@@ -167,11 +130,19 @@ jobs:
     - name: Install dependencies
       run: choco install cmake ninja
 
-    - name: Configure and build llvm-nm
+    - name: Configure and build llvm-nm (STATIC)
       run: |
         mkdir build
         cd build
-        cmake -G "Ninja" ../llvm -DLLVM_ENABLE_PROJECTS=llvm -DLLVM_TOOL_LLVM_NM_BUILD=ON -DLLVM_TARGETS_TO_BUILD=X86 -DCMAKE_BUILD_TYPE=Release
+        cmake -G "Ninja" ../llvm `
+          -DLLVM_ENABLE_PROJECTS=llvm `
+          -DLLVM_TOOL_LLVM_NM_BUILD=ON `
+          -DLLVM_TARGETS_TO_BUILD=X86 `
+          -DCMAKE_BUILD_TYPE=Release `
+          -DLLVM_USE_CRT_RELEASE=MT `
+          -DBUILD_SHARED_LIBS=OFF `
+          -DLLVM_LINK_LLVM_DYLIB=OFF `
+          -DLLVM_BUILD_LLVM_DYLIB=OFF
         ninja llvm-nm
 
     - name: Prepare artifact
